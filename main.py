@@ -1,98 +1,117 @@
 """
+=========================================================
 main.py
-Main program for Smart Surveillance System
+
+Smart Surveillance System
+Main Application
+=========================================================
 """
 
-import os
 import cv2
-from datetime import datetime
+import time
 
 import config
+
+from logger import logger
 from camera import Camera
 from motion import MotionDetector
 from face_detection import FaceDetector
 from telegram_bot import TelegramBot
+from utils import (
+    save_image,
+    draw_status
+)
 
 
-def create_folder():
+class SmartSurveillanceSystem:
 
-    if not os.path.exists(config.IMAGE_FOLDER):
-        os.makedirs(config.IMAGE_FOLDER)
+    def __init__(self):
 
+        logger.system_started()
 
-def save_image(frame):
+        self.camera = Camera()
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.motion = MotionDetector()
 
-    filename = os.path.join(
-        config.IMAGE_FOLDER,
-        f"intruder_{timestamp}.jpg"
-    )
+        self.face = FaceDetector()
 
-    cv2.imwrite(filename, frame)
+        self.telegram = TelegramBot()
 
-    return filename
+        self.last_alert_time = 0
 
+        self.alert_interval = 10
 
-def main():
+    def process_frame(self, frame):
 
-    create_folder()
+        motion_found, frame, motion_count = self.motion.detect(frame)
 
-    camera = Camera()
+        if motion_found:
 
-    motion_detector = MotionDetector()
+            draw_status(frame, "Motion Detected")
 
-    face_detector = FaceDetector()
-
-    telegram = TelegramBot()
-
-    print("Smart Surveillance System Started...")
-    print("Press 'Q' to Exit.")
-
-    while True:
-
-        frame = camera.get_frame()
-
-        if frame is None:
-            break
-
-        motion_detected, motion_frame = motion_detector.detect_motion(frame)
-
-        display_frame = motion_frame
-
-        if motion_detected:
-
-            display_frame, faces = face_detector.detect_faces(display_frame)
+            frame, faces = self.face.detect(frame)
 
             if len(faces) > 0:
 
-                image_path = save_image(display_frame)
+                current_time = time.time()
 
-                telegram.send_message(config.ALERT_MESSAGE)
+                if current_time - self.last_alert_time >= self.alert_interval:
 
-                telegram.send_photo(image_path)
+                    image_path = save_image(frame)
 
-                cv2.putText(
-                    display_frame,
-                    "ALERT SENT",
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 0, 255),
-                    2
-                )
+                    logger.image_saved(image_path)
 
-        cv2.imshow("Smart Surveillance System", display_frame)
+                    self.telegram.send_alert(image_path)
 
-        key = cv2.waitKey(1) & 0xFF
+                    self.last_alert_time = current_time
 
-        if key == ord("q"):
-            break
+        else:
 
-    camera.release()
+            draw_status(frame, "Monitoring...")
 
-    cv2.destroyAllWindows()
+        return frame
+
+    def run(self):
+
+        while True:
+
+            success, frame = self.camera.read()
+
+            if not success:
+
+                continue
+
+            frame = self.process_frame(frame)
+
+            self.camera.show(frame)
+
+            key = self.camera.key_pressed()
+
+            if key == ord("q"):
+
+                break
+
+        self.shutdown()
+
+    def shutdown(self):
+
+        self.camera.release()
+
+        logger.system_stopped()
 
 
 if __name__ == "__main__":
-    main()
+
+    try:
+
+        system = SmartSurveillanceSystem()
+
+        system.run()
+
+    except KeyboardInterrupt:
+
+        logger.warning("Program interrupted by user.")
+
+    except Exception as error:
+
+        logger.application_error(error)
